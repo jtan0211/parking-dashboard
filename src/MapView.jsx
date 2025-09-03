@@ -12,25 +12,29 @@ export default function MapView({ apiUrl }) {
     const mapName = process.env.REACT_APP_LOCATION_MAP_NAME;
     const apiKey  = process.env.REACT_APP_LOCATION_API_KEY;
 
-    // Sanity check the key so we don’t accidentally send a URL/ARN
-    if (!apiKey || apiKey.startsWith("http") || apiKey.startsWith("arn:")) {
-      setErr("Invalid REACT_APP_LOCATION_API_KEY. Please paste the v1.public… key value.");
-      return;
-    }
+    // Build the style URL once
+    const amazonStyle = (region && mapName)
+      ? `https://maps.geo.${region}.amazonaws.com/maps/v0/maps/${encodeURIComponent(mapName)}/style-descriptor`
+      : null;
 
-    const styleUrl = `https://maps.geo.${region}.amazonaws.com/maps/v0/maps/${mapName}/style-descriptor`;
-
-    let map;
     try {
-      map = new maplibregl.Map({
+      const map = new maplibregl.Map({
         container: "map",
-        style: styleUrl,
+        style: amazonStyle || "https://demotiles.maplibre.org/style.json",
         center: [101.142, 4.335],
         zoom: 17,
-        // Attach the API key to **all** Amazon Location requests
+
+        // IMPORTANT: pass API key as query param to avoid CORS preflight
         transformRequest: (url, resourceType) => {
-          if (url.includes(`maps.geo.${region}.amazonaws.com/`)) {
-            return { url, headers: { "X-Amz-Api-Key": apiKey } };
+          // Only touch Amazon Location map requests
+          const isAmazonMaps = url.startsWith(`https://maps.geo.${region}.amazonaws.com/`);
+          if (isAmazonMaps && apiKey) {
+            const u = new URL(url);
+            // add key=… if not present
+            if (!u.searchParams.has("key")) {
+              u.searchParams.set("key", apiKey);
+            }
+            return { url: u.toString() };
           }
           return { url };
         }
@@ -41,22 +45,26 @@ export default function MapView({ apiUrl }) {
 
       map.on("load", async () => {
         try {
+          // Load your layout
           const r = await fetch("/parking_slots.geojson");
           if (!r.ok) throw new Error(`geojson ${r.status}`);
           const geo = await r.json();
 
-          let statusById = new Map();
+          // Overlay current statuses
+          const statusById = new Map();
           try {
             const api = await fetch(apiUrl).then(x => x.json());
             api.forEach(d => statusById.set(d.slot_id, d.status));
-          } catch {}
-
+          } catch (e) {
+            console.warn("[MapView] API fetch failed (will render without live status):", e);
+          }
           geo.features.forEach(f => {
             const id = f.properties?.slot_id;
             f.properties = f.properties || {};
             f.properties.status = statusById.get(id) || "unknown";
           });
 
+          // Add layers
           map.addSource("slots", { type: "geojson", data: geo });
           map.addLayer({
             id: "slots-fill",
@@ -67,9 +75,9 @@ export default function MapView({ apiUrl }) {
                 "match", ["get","status"],
                 "occupied", "#d93025",
                 "vacant",   "#1a7f37",
-                /* else */  "#9e9e9e"
+                "#9e9e9e"
               ],
-              "fill-opacity": 0.45
+              "fill-opacity": 0.5
             }
           });
           map.addLayer({
@@ -94,32 +102,35 @@ export default function MapView({ apiUrl }) {
             }
           });
 
-          // Fit to all polygons
+          // Fit to all slot geometries
           const b = new maplibregl.LngLatBounds();
-          geo.features.forEach(f =>
-            (f.geometry.coordinates || []).flat(2).forEach(([lng, lat]) => b.extend([lng, lat]))
-          );
+          geo.features.forEach(f => {
+            const coords = (f.geometry?.coordinates || []).flat(2);
+            coords.forEach(([lng, lat]) => b.extend([lng, lat]));
+          });
           if (!b.isEmpty()) map.fitBounds(b, { padding: 40, maxZoom: 19 });
         } catch (e) {
+          console.error("[MapView] init error:", e);
           setErr(String(e));
-          console.error(e);
         }
       });
 
-      map.on("error", e => console.error("map error:", e?.error || e));
-    } catch (e) {
-      setErr(String(e));
-      console.error(e);
-    }
+      map.on("error", (e) => {
+        console.error("[MapView] map error:", e?.error || e);
+      });
 
-    return () => { try { map?.remove(); } catch {} };
+      return () => map.remove();
+    } catch (e) {
+      console.error("[MapView] constructor failed:", e);
+      setErr(String(e));
+    }
   }, [apiUrl]);
 
   return (
     <div style={{ position: "relative" }}>
       {err && (
         <div style={{ position: "absolute", zIndex: 2, top: 8, left: 8, background: "#fee", color: "#900", padding: 8, borderRadius: 6 }}>
-          Map error: {err}
+          map error: {err}
         </div>
       )}
       <div id="map" style={{ height: 600, width: "100%", border: "1px solid #ccc", borderRadius: 8 }} />
