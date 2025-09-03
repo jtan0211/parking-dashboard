@@ -23,10 +23,10 @@ export default function MapView({ apiUrl }) {
     const mapName = process.env.REACT_APP_LOCATION_MAP_NAME || "UTARParkingMap";
     const apiKey = process.env.REACT_APP_LOCATION_API_KEY;
 
-    console.log("AWS Location Config:", { 
-      region, 
-      mapName, 
-      apiKey: apiKey ? `${apiKey.substring(0, 8)}...` : "MISSING" 
+    console.log("AWS Location Config:", {
+      region,
+      mapName,
+      apiKey: apiKey ? `${apiKey.substring(0, 8)}...` : "MISSING"
     });
 
     // Check for missing configuration
@@ -149,7 +149,7 @@ Steps to fix:
               "text-field": ["get", "slot_id"],
               "text-size": 10,
               "text-allow-overlap": true,
-              "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"]
+              // "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"] <--- REMOVED THIS LINE
             },
             paint: {
               "text-color": "#fff",
@@ -244,13 +244,13 @@ This might be due to:
     <div style={{ position: "relative" }}>
       {loading && (
         <div style={{
-          position: "absolute", 
-          zIndex: 1000, 
-          top: "50%", 
+          position: "absolute",
+          zIndex: 1000,
+          top: "50%",
           left: "50%",
           transform: "translate(-50%, -50%)",
-          background: "rgba(255, 255, 255, 0.9)", 
-          padding: 20, 
+          background: "rgba(255, 255, 255, 0.9)",
+          padding: 20,
           borderRadius: 8,
           textAlign: "center"
         }}>
@@ -263,14 +263,14 @@ This might be due to:
       
       {err && (
         <div style={{
-          position: "absolute", 
-          zIndex: 1000, 
-          top: 10, 
+          position: "absolute",
+          zIndex: 1000,
+          top: 10,
           left: 10,
           right: 10,
-          background: "#fee2e2", 
-          color: "#991b1b", 
-          padding: 16, 
+          background: "#fee2e2",
+          color: "#991b1b",
+          padding: 16,
           borderRadius: 8,
           border: "1px solid #fecaca",
           fontSize: 14,
@@ -284,10 +284,10 @@ This might be due to:
       
       <div
         id="map"
-        style={{ 
-          height: 640, 
-          width: "100%", 
-          border: "1px solid #ccc", 
+        style={{
+          height: 640,
+          width: "100%",
+          border: "1px solid #ccc",
           borderRadius: 8,
           backgroundColor: loading ? "#f5f5f5" : "transparent"
         }}
