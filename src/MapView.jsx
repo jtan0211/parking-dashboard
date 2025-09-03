@@ -1,70 +1,65 @@
-import React, { useEffect, useRef } from "react";
+// src/MapView.jsx
+import React, { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 export default function MapView({ apiUrl }) {
   const mapRef = useRef(null);
+  const [err, setErr] = useState("");
 
   useEffect(() => {
+    console.log("[MapView] mounted");
+
     const region = process.env.REACT_APP_LOCATION_REGION;
     const mapName = process.env.REACT_APP_LOCATION_MAP_NAME;
     const apiKey  = process.env.REACT_APP_LOCATION_API_KEY;
 
-    if (!region || !mapName || !apiKey) {
-      console.warn("Map env vars missing; check Amplify env vars.");
-    }
+    console.log("[MapView] env", { region, mapName, hasApiKey: !!apiKey });
 
-    const styleUrl =
-      `https://maps.geo.${region}.amazonaws.com/maps/v0/maps/${mapName}/style-descriptor`;
+    const amazonStyle =
+      region && mapName
+        ? `https://maps.geo.${region}.amazonaws.com/maps/v0/maps/${mapName}/style-descriptor`
+        : null;
 
-    const map = new maplibregl.Map({
-      container: "map",
-      style: styleUrl,
-      center: [101.142, 4.335],
-      zoom: 17,
-      transformRequest: (url) => {
-        if (url.startsWith(`https://maps.geo.${region}.amazonaws.com/`)) {
-          return { url, headers: { "x-amz-api-key": apiKey } };
-        }
-        return { url };
-      }
-    });
-    map.addControl(new maplibregl.NavigationControl(), "top-right");
-    mapRef.current = map;
-
-    (async () => {
-      try {
-        // Attempt to load both; if GeoJSON fails we'll see it in the App's error too.
-        const [geoResp, apiResp] = await Promise.allSettled([
-          fetch("/parking_slots.geojson"),
-          fetch(apiUrl)
-        ]);
-
-        let geo = null;
-        if (geoResp.status === "fulfilled" && geoResp.value.ok) {
-          geo = await geoResp.value.json();
-        } else {
-          console.error("Map GeoJSON fetch failed", geoResp);
-          return; // without geometry we can't draw
-        }
-
-        const statusById = new Map();
-        if (apiResp.status === "fulfilled") {
-          try {
-            const data = await apiResp.value.json();
-            data.forEach(d => statusById.set(d.slot_id, d.status));
-          } catch (e) {
-            console.warn("Map API parse failed", e);
+    try {
+      const map = new maplibregl.Map({
+        container: "map",
+        style: amazonStyle || "https://demotiles.maplibre.org/style.json", // fallback so we always see *something*
+        center: [101.142, 4.335],
+        zoom: 17,
+        transformRequest: (url) => {
+          if (amazonStyle && url.startsWith(`https://maps.geo.${region}.amazonaws.com/`)) {
+            return { url, headers: { "x-amz-api-key": apiKey || "" } };
           }
+          return { url };
         }
+      });
 
-        geo.features.forEach(f => {
-          const id = f.properties?.slot_id;
-          f.properties = f.properties || {};
-          f.properties.status = statusById.get(id) || "unknown";
-        });
+      map.addControl(new maplibregl.NavigationControl(), "top-right");
+      mapRef.current = map;
 
-        map.on("load", () => {
+      map.on("load", async () => {
+        console.log("[MapView] map load fired");
+        try {
+          const r = await fetch("/parking_slots.geojson");
+          console.log("[MapView] geojson status", r.status);
+          if (!r.ok) throw new Error("geojson not served");
+          const geo = await r.json();
+
+          let statusById = new Map();
+          try {
+            const api = await fetch(apiUrl).then(x => x.json());
+            api.forEach(d => statusById.set(d.slot_id, d.status));
+          } catch (e) {
+            console.warn("[MapView] API fetch failed (ok for now):", e);
+          }
+
+          geo.features.forEach(f => {
+            const id = f.properties?.slot_id;
+            f.properties = f.properties || {};
+            f.properties.status = statusById.get(id) || "unknown";
+          });
+
           map.addSource("slots", { type: "geojson", data: geo });
           map.addLayer({
             id: "slots-fill",
@@ -86,7 +81,23 @@ export default function MapView({ apiUrl }) {
             source: "slots",
             paint: { "line-color": "#333", "line-width": 1 }
           });
+          map.addLayer({
+            id: "slots-labels",
+            type: "symbol",
+            source: "slots",
+            layout: {
+              "text-field": ["get", "slot_id"],
+              "text-size": 12,
+              "text-allow-overlap": true
+            },
+            paint: {
+              "text-color": "#111",
+              "text-halo-color": "#fff",
+              "text-halo-width": 1
+            }
+          });
 
+          // Fit to geometry
           try {
             const b = new maplibregl.LngLatBounds();
             geo.features.forEach(f =>
@@ -95,16 +106,41 @@ export default function MapView({ apiUrl }) {
             );
             if (!b.isEmpty()) map.fitBounds(b, { padding: 40, maxZoom: 19 });
           } catch (e) {
-            console.warn("fitBounds failed", e);
+            console.warn("[MapView] fitBounds failed", e);
           }
-        });
-      } catch (e) {
-        console.error("Map init error", e);
-      }
-    })();
+        } catch (e) {
+          console.error("[MapView] init error:", e);
+          setErr(String(e));
+        }
+      });
 
-    return () => map.remove();
+      map.on("error", (e) => {
+        console.error("[MapView] map error:", e?.error || e);
+      });
+
+      return () => map.remove();
+    } catch (e) {
+      console.error("[MapView] constructor failed:", e);
+      setErr(String(e));
+    }
   }, [apiUrl]);
 
-  return <div id="map" style={{ height: 600, width: "100%", border: "1px solid #ccc", borderRadius: 8 }} />;
+  return (
+    <div style={{ position: "relative" }}>
+      {err && (
+        <div style={{ position: "absolute", zIndex: 2, top: 8, left: 8, background: "#fee", color: "#900", padding: 8, borderRadius: 6 }}>
+          Map error: {err}
+        </div>
+      )}
+      <div
+        id="map"
+        style={{
+          height: 600,           // <<< visible height
+          width: "100%",
+          border: "1px solid #ccc",
+          borderRadius: 8
+        }}
+      />
+    </div>
+  );
 }
