@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
+import "maplibre-gl/dist/maplibre-gl.css";
 
 export default function MapView({ apiUrl }) {
   const mapRef = useRef(null);
@@ -9,12 +10,17 @@ export default function MapView({ apiUrl }) {
     const mapName = process.env.REACT_APP_LOCATION_MAP_NAME;
     const apiKey  = process.env.REACT_APP_LOCATION_API_KEY;
 
-    const styleUrl = `https://maps.geo.${region}.amazonaws.com/maps/v0/maps/${mapName}/style-descriptor`;
+    if (!region || !mapName || !apiKey) {
+      console.warn("Map env vars missing; check Amplify env vars.");
+    }
+
+    const styleUrl =
+      `https://maps.geo.${region}.amazonaws.com/maps/v0/maps/${mapName}/style-descriptor`;
 
     const map = new maplibregl.Map({
       container: "map",
       style: styleUrl,
-      center: [101.142, 4.335],   // adjust if you like
+      center: [101.142, 4.335],
       zoom: 17,
       transformRequest: (url) => {
         if (url.startsWith(`https://maps.geo.${region}.amazonaws.com/`)) {
@@ -27,67 +33,74 @@ export default function MapView({ apiUrl }) {
     mapRef.current = map;
 
     (async () => {
-      // 1) live statuses from DynamoDB via your Lambda/API Gateway
-      const db = await fetch(apiUrl).then(r => r.json());
-      const statusById = new Map(db.map(d => [d.slot_id, d.status]));
+      try {
+        // Attempt to load both; if GeoJSON fails we'll see it in the App's error too.
+        const [geoResp, apiResp] = await Promise.allSettled([
+          fetch("/parking_slots.geojson"),
+          fetch(apiUrl)
+        ]);
 
-      // 2) parking layout from /public
-      const geo = await fetch("/parking_slots.geojson").then(r => r.json());
+        let geo = null;
+        if (geoResp.status === "fulfilled" && geoResp.value.ok) {
+          geo = await geoResp.value.json();
+        } else {
+          console.error("Map GeoJSON fetch failed", geoResp);
+          return; // without geometry we can't draw
+        }
 
-      // 3) join: attach status to each feature
-      geo.features.forEach(f => {
-        const id = f.properties?.slot_id;
-        f.properties = f.properties || {};
-        f.properties.status = statusById.get(id) || "unknown";
-      });
+        const statusById = new Map();
+        if (apiResp.status === "fulfilled") {
+          try {
+            const data = await apiResp.value.json();
+            data.forEach(d => statusById.set(d.slot_id, d.status));
+          } catch (e) {
+            console.warn("Map API parse failed", e);
+          }
+        }
 
-      // 4) add to map
-      map.on("load", () => {
-        map.addSource("slots", { type: "geojson", data: geo });
+        geo.features.forEach(f => {
+          const id = f.properties?.slot_id;
+          f.properties = f.properties || {};
+          f.properties.status = statusById.get(id) || "unknown";
+        });
 
-        map.addLayer({
-          id: "slots-fill",
-          type: "fill",
-          source: "slots",
-          paint: {
-            "fill-color": [
-              "match",
-              ["get", "status"],
-              "occupied", "#d93025",
-              "vacant",   "#1a7f37",
-              "#9e9e9e"
-            ],
-            "fill-opacity": 0.45
+        map.on("load", () => {
+          map.addSource("slots", { type: "geojson", data: geo });
+          map.addLayer({
+            id: "slots-fill",
+            type: "fill",
+            source: "slots",
+            paint: {
+              "fill-color": [
+                "match", ["get","status"],
+                "occupied", "#d93025",
+                "vacant",   "#1a7f37",
+                "#9e9e9e"
+              ],
+              "fill-opacity": 0.45
+            }
+          });
+          map.addLayer({
+            id: "slots-outline",
+            type: "line",
+            source: "slots",
+            paint: { "line-color": "#333", "line-width": 1 }
+          });
+
+          try {
+            const b = new maplibregl.LngLatBounds();
+            geo.features.forEach(f =>
+              (f.geometry.coordinates || []).flat(2)
+                .forEach(([lng, lat]) => b.extend([lng, lat]))
+            );
+            if (!b.isEmpty()) map.fitBounds(b, { padding: 40, maxZoom: 19 });
+          } catch (e) {
+            console.warn("fitBounds failed", e);
           }
         });
-        map.addLayer({
-          id: "slots-outline",
-          type: "line",
-          source: "slots",
-          paint: { "line-color": "#333", "line-width": 1 }
-        });
-
-        // click popup
-        map.on("click", "slots-fill", (e) => {
-          const f = e.features?.[0];
-          if (!f) return;
-          const { slot_id, status } = f.properties;
-          new maplibregl.Popup()
-            .setLngLat(e.lngLat)
-            .setHTML(`<strong>${slot_id}</strong><br/>${status}`)
-            .addTo(map);
-        });
-
-        // fit to polygons
-        try {
-          const b = new maplibregl.LngLatBounds();
-          geo.features.forEach(f =>
-            (f.geometry.coordinates || []).flat(2)
-              .forEach(([lng, lat]) => b.extend([lng, lat]))
-          );
-          if (!b.isEmpty()) map.fitBounds(b, { padding: 40, maxZoom: 19 });
-        } catch {}
-      });
+      } catch (e) {
+        console.error("Map init error", e);
+      }
     })();
 
     return () => map.remove();
