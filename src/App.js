@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import ParkingDashboard from "./ParkingDashboard";
+import MapView from "./MapView";
 
 function App() {
   const [slots, setSlots] = useState([]);
