@@ -5,6 +5,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 export default function MapView({ apiUrl }) {
   const mapRef = useRef(null);
   const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
 
   // Recursively collect [lng,lat] pairs from any GeoJSON coordinate tree
   function collectPositions(coords, out = []) {
@@ -22,10 +23,22 @@ export default function MapView({ apiUrl }) {
     const mapName = process.env.REACT_APP_LOCATION_MAP_NAME || "UTARParkingMap";
     const apiKey = process.env.REACT_APP_LOCATION_API_KEY;
 
-    console.log("AWS Location Config:", { region, mapName, apiKey: apiKey ? "***" : "MISSING" });
+    console.log("AWS Location Config:", { 
+      region, 
+      mapName, 
+      apiKey: apiKey ? `${apiKey.substring(0, 8)}...` : "MISSING" 
+    });
 
-    if (!apiKey || apiKey.includes("PASTE_YOUR")) {
-      setErr("AWS Location API key is missing. Please set REACT_APP_LOCATION_API_KEY in your environment.");
+    // Check for missing configuration
+    if (!apiKey || apiKey.includes("PASTE_YOUR") || apiKey.includes("YOUR_COPIED_API_KEY_HERE")) {
+      setErr(`AWS Location API key is missing or not configured. Please check your environment variables.
+      
+Steps to fix:
+1. Go to AWS Console > Amazon Location Service > API keys
+2. Create an API key for your map
+3. Set REACT_APP_LOCATION_API_KEY in your .env file
+4. Restart your development server`);
+      setLoading(false);
       return;
     }
 
@@ -36,8 +49,8 @@ export default function MapView({ apiUrl }) {
       const map = new maplibregl.Map({
         container: "map",
         style: styleUrl,
-        center: [101.139, 4.3386], // Corrected center for your parking area
-        zoom: 19, // Zoom in closer to see parking slots clearly
+        center: [101.139, 4.3386], // UTAR Kampar Block M coordinates
+        zoom: 19, // Close zoom to see parking slots
         transformRequest: (url) => {
           if (url.startsWith(`https://maps.geo.${region}.amazonaws.com/`)) {
             if (url.includes("key=")) return { url };
@@ -53,7 +66,8 @@ export default function MapView({ apiUrl }) {
 
       map.on("load", async () => {
         try {
-          console.log("Map loaded, fetching parking slots...");
+          setLoading(false);
+          console.log("Map loaded successfully, adding parking slots...");
           
           // 1) Load your parking layout
           const r = await fetch("/parking_slots.geojson");
@@ -65,16 +79,27 @@ export default function MapView({ apiUrl }) {
           // 2) Try to get live status from API
           let statusById = new Map();
           try {
-            if (apiUrl && !apiUrl.includes("PASTE_YOUR")) {
+            if (apiUrl && !apiUrl.includes("PASTE_YOUR") && !apiUrl.includes("YOUR_API_GATEWAY_URL_HERE")) {
               console.log("Fetching live status from:", apiUrl);
               const live = await fetch(apiUrl).then(x => x.json());
               live.forEach(d => statusById.set(d.slot_id, d.status));
               console.log(`Loaded live status for ${statusById.size} slots`);
             } else {
-              console.log("No API URL configured, using unknown status");
+              console.log("No API URL configured, using demo data");
+              // Add some demo data for testing
+              ['A1', 'A3', 'A5', 'A15', 'A20', 'A25'].forEach(id => {
+                statusById.set(id, 'occupied');
+              });
+              ['A2', 'A4', 'A6', 'A10', 'A16', 'A30'].forEach(id => {
+                statusById.set(id, 'vacant');
+              });
             }
           } catch (e) {
-            console.warn("[MapView] Live status fetch failed; using unknown:", e);
+            console.warn("[MapView] Live status fetch failed; using demo data:", e);
+            // Fallback to demo data
+            ['A1', 'A3', 'A5', 'A15', 'A20', 'A25'].forEach(id => {
+              statusById.set(id, 'occupied');
+            });
           }
 
           // 3) Merge status with layout
@@ -100,7 +125,7 @@ export default function MapView({ apiUrl }) {
                 "vacant", "#1a7f37",   // green
                 "#9e9e9e"              // gray for unknown
               ],
-              "fill-opacity": 0.7
+              "fill-opacity": 0.8
             }
           });
 
@@ -110,8 +135,8 @@ export default function MapView({ apiUrl }) {
             type: "line",
             source: "slots",
             paint: { 
-              "line-color": "#333", 
-              "line-width": 2 
+              "line-color": "#222", 
+              "line-width": 1.5 
             }
           });
 
@@ -122,8 +147,9 @@ export default function MapView({ apiUrl }) {
             source: "slots",
             layout: {
               "text-field": ["get", "slot_id"],
-              "text-size": 11,
-              "text-allow-overlap": true
+              "text-size": 10,
+              "text-allow-overlap": true,
+              "text-font": ["Open Sans Regular", "Arial Unicode MS Regular"]
             },
             paint: {
               "text-color": "#fff",
@@ -141,8 +167,8 @@ export default function MapView({ apiUrl }) {
           
           if (!bounds.isEmpty()) {
             map.fitBounds(bounds, { 
-              padding: 50, 
-              maxZoom: 21 // Allow very close zoom
+              padding: 40, 
+              maxZoom: 21
             });
           }
 
@@ -168,12 +194,14 @@ export default function MapView({ apiUrl }) {
             new maplibregl.Popup({ closeButton: true })
               .setLngLat(e.lngLat)
               .setHTML(`
-                <div style="font-family: system-ui; padding: 10px;">
-                  <div style="font-weight: bold; font-size: 14px;">Slot ${slot_id}</div>
-                  <div style="margin: 5px 0;">
-                    Status: <span style="color: ${statusColor}; font-weight: bold;">${status}</span>
+                <div style="font-family: system-ui; padding: 12px;">
+                  <div style="font-weight: bold; font-size: 14px; margin-bottom: 8px;">
+                    Parking Slot ${slot_id}
                   </div>
-                  ${last_updated ? `<div style="color: #666; font-size: 12px;">Updated: ${last_updated}</div>` : ""}
+                  <div style="margin: 6px 0;">
+                    Status: <span style="color: ${statusColor}; font-weight: bold; text-transform: capitalize;">${status}</span>
+                  </div>
+                  ${last_updated ? `<div style="color: #666; font-size: 12px; margin-top: 6px;">Updated: ${last_updated}</div>` : ""}
                 </div>
               `)
               .addTo(map);
@@ -184,12 +212,19 @@ export default function MapView({ apiUrl }) {
         } catch (e) {
           console.error("[MapView] Setup error:", e);
           setErr(`Map setup failed: ${e.message}`);
+          setLoading(false);
         }
       });
 
       map.on("error", (e) => {
         console.error("[MapView] Map error:", e);
-        setErr(`Map error: ${e?.error?.message || e.message || "Unknown error"}`);
+        setErr(`Map error: ${e?.error?.message || e.message || "Unknown error"}
+        
+This might be due to:
+1. Invalid AWS Location API key
+2. Incorrect map name or region
+3. Network connectivity issues`);
+        setLoading(false);
       });
 
       return () => {
@@ -201,11 +236,31 @@ export default function MapView({ apiUrl }) {
     } catch (e) {
       console.error("[MapView] Constructor failed:", e);
       setErr(`Failed to initialize map: ${e.message}`);
+      setLoading(false);
     }
   }, [apiUrl]);
 
   return (
     <div style={{ position: "relative" }}>
+      {loading && (
+        <div style={{
+          position: "absolute", 
+          zIndex: 1000, 
+          top: "50%", 
+          left: "50%",
+          transform: "translate(-50%, -50%)",
+          background: "rgba(255, 255, 255, 0.9)", 
+          padding: 20, 
+          borderRadius: 8,
+          textAlign: "center"
+        }}>
+          <div>Loading AWS Location Services...</div>
+          <div style={{ fontSize: 12, color: "#666", marginTop: 4 }}>
+            Initializing map for UTAR Kampar Block M
+          </div>
+        </div>
+      )}
+      
       {err && (
         <div style={{
           position: "absolute", 
@@ -215,21 +270,26 @@ export default function MapView({ apiUrl }) {
           right: 10,
           background: "#fee2e2", 
           color: "#991b1b", 
-          padding: 12, 
-          borderRadius: 6,
+          padding: 16, 
+          borderRadius: 8,
           border: "1px solid #fecaca",
-          fontSize: 14
+          fontSize: 14,
+          lineHeight: 1.4,
+          whiteSpace: "pre-line"
         }}>
-          <strong>Map Error:</strong> {err}
+          <strong>⚠️ Configuration Error:</strong>
+          <div style={{ marginTop: 8 }}>{err}</div>
         </div>
       )}
+      
       <div
         id="map"
         style={{ 
           height: 640, 
           width: "100%", 
           border: "1px solid #ccc", 
-          borderRadius: 8 
+          borderRadius: 8,
+          backgroundColor: loading ? "#f5f5f5" : "transparent"
         }}
       />
     </div>
