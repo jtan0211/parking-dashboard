@@ -1,36 +1,56 @@
 import React, { useEffect, useState } from "react";
-import ParkingDashboard from "./ParkingDashboard";
 import MapView from "./MapView";
 
-function App() {
-  const [slots, setSlots] = useState([]);
+const API_URL = process.env.REACT_APP_API_URL || "PASTE_YOUR_API_GATEWAY_URL_HERE";
+
+export default function App() {
+  const [rows, setRows] = useState([]);
 
   useEffect(() => {
-  async function loadData() {
-    const layout = await fetch("/parking_slots.geojson").then(res => res.json());
-    const apiData = await fetch("YOUR_API_GATEWAY_URL").then(res => res.json());
+    async function load() {
+      const layout = await fetch("/parking_slots.geojson").then(r => r.json());
+      const db = await fetch(API_URL).then(r => r.json()).catch(() => []);
 
-    // merge DynamoDB status into layout
-    const statusMap = {};
-    apiData.forEach(s => {
-      statusMap[s.slot_id] = s.status;
-    });
+      const status = {};
+      db.forEach(d => { status[d.slot_id] = d.status; });
 
-    setSlots(layout.features.map(f => ({
-      id: f.properties.slot_id,
-      status: statusMap[f.properties.slot_id] || "unknown"
-    })));
-  }
-  loadData();
-}, []);
+      const merged = layout.features
+        .map(f => f.properties?.slot_id)
+        .sort((a,b) => {
+          const na = Number(a.slice(1)), nb = Number(b.slice(1));
+          return na - nb;
+        })
+        .map(id => ({ id, status: status[id] || "unknown" }));
 
+      setRows(merged);
+    }
+    load();
+  }, []);
 
   return (
-    <div style={{ padding: "20px" }}>
+    <div style={{ padding: 20 }}>
       <h1>UTAR Parking Dashboard</h1>
-      <ParkingDashboard slots={slots} />
+
+      {/* Table */}
+      <table border="1" cellPadding="6" style={{ borderCollapse: "collapse", minWidth: 280 }}>
+        <thead>
+          <tr><th>Slot ID</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {rows.map(s => (
+            <tr key={s.id}>
+              <td>{s.id}</td>
+              <td style={{ color: s.status === "occupied" ? "red" : (s.status === "vacant" ? "green" : "#666") }}>
+                {s.status}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {/* Map */}
+      <h2 style={{ marginTop: 24 }}>Interactive Map</h2>
+      <MapView apiUrl={API_URL} />
     </div>
   );
 }
-
-export default App;
