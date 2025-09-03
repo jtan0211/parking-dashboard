@@ -1,7 +1,7 @@
 import React from "react";
 import MapView from "./MapView";
+import SchematicLot from "./SchematicLot";
 
-// Keep using your Amplify env var. If you must hardcode temporarily, paste the URL here.
 const API_URL = process.env.REACT_APP_API_URL || "PASTE_YOUR_API_GATEWAY_URL_HERE";
 
 export default function App() {
@@ -16,7 +16,11 @@ export default function App() {
         <Chip color="#9e9e9e" label="Unknown" />
       </div>
 
-      {/* The actual layout (GeoJSON) with labels + colors */}
+      {/* New: schematic layout (exact like QGIS drawing) */}
+      <SchematicLot apiUrl={API_URL} />
+
+      {/* Optional: keep the interactive map underneath */}
+      <h2 style={{ margin: "22px 0 10px" }}>Interactive Map</h2>
       <MapView apiUrl={API_URL} />
     </div>
   );
