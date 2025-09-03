@@ -4,20 +4,28 @@ export default function ParkingDashboard() {
   const [slots, setSlots] = useState([]);
 
   useEffect(() => {
-    // Load parking slot layout
-    fetch("/parking_slots.geojson")
-      .then(res => res.json())
-      .then(data => {
-        setSlots(data.features.map(f => ({
-          id: f.properties.slot_id,
-        })));
+    async function loadData() {
+      const layout = await fetch("/parking_slots.geojson").then(res => res.json());
+      const apiData = await fetch("YOUR_API_GATEWAY_URL").then(res => res.json());
+
+      // Map DynamoDB slot status
+      const statusMap = {};
+      apiData.forEach(s => {
+        statusMap[s.slot_id] = s.status;
       });
+
+      setSlots(layout.features.map(f => ({
+        id: f.properties.slot_id,
+        status: statusMap[f.properties.slot_id] || "unknown"
+      })));
+    }
+    loadData();
   }, []);
 
   return (
     <div>
       <h2>UTAR Parking Dashboard</h2>
-      <table border="1" style={{ borderCollapse: "collapse" }}>
+      <table border="1" style={{ borderCollapse: "collapse", minWidth: "300px" }}>
         <thead>
           <tr>
             <th>Slot ID</th>
@@ -28,7 +36,9 @@ export default function ParkingDashboard() {
           {slots.map(slot => (
             <tr key={slot.id}>
               <td>{slot.id}</td>
-              <td id={`status-${slot.id}`}>Loading...</td>
+              <td style={{ color: slot.status === "occupied" ? "red" : "green" }}>
+                {slot.status}
+              </td>
             </tr>
           ))}
         </tbody>
