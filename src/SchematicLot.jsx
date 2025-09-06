@@ -28,12 +28,22 @@ export default function SchematicLot({ apiUrl }) {
   useEffect(() => {
     (async () => {
       try {
-        const live = await fetch(apiUrl).then(x => x.json());
-        const m = new Map();
-        live.forEach(d => m.set(d.slot_id, d.status));
-        setStatusById(m);
+         if (apiUrl && !apiUrl.includes("PASTE_YOUR") && !apiUrl.includes("YOUR_API_GATEWAY_URL_HERE")) {
+          const live = await fetch(apiUrl).then(x => x.json());
+          const m = new Map();
+          live.forEach(d => m.set(d.slot_id, d.status));
+          setStatusById(m);
+        } else {
+          const demo = new Map();
+          ['A1','A3','A5','A15','A20','A25'].forEach(id => demo.set(id,'occupied'));
+          ['A2','A4','A6','A10','A16','A30'].forEach(id => demo.set(id,'vacant'));
+          setStatusById(demo);
+        }
       } catch (e) {
-        console.warn("Status fetch failed (using unknown):", e);
+        console.warn("Status fetch failed (using demo data):", e);
+        const demo = new Map();
+        ['A1','A3','A5','A15','A20','A25'].forEach(id => demo.set(id,'occupied'));
+        setStatusById(demo);
       }
     })();
   }, [apiUrl]);
