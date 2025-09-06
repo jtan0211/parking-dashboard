@@ -1,4 +1,3 @@
-// src/SchematicLot.jsx
 import React, { useEffect, useMemo, useState } from "react";
 
 const W = 1200;      // logical width for the SVG viewBox (responsive)
@@ -9,51 +8,90 @@ export default function SchematicLot({ apiUrl }) {
   const [geo, setGeo] = useState(null);
   const [statusById, setStatusById] = useState(new Map());
   const [err, setErr] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [apiStatus, setApiStatus] = useState("Connecting...");
 
-  // Load layout + live status
+  // Load parking layout
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch("/parking_slots.geojson");
-        if (!r.ok) throw new Error(`Failed to load parking_slots.geojson (${r.status})`);
-        const g = await r.json();
-        setGeo(g);
-      } catch (e) {
-        console.error(e);
-        setErr(String(e));
+        console.log("📋 Loading parking layout...");
+        const response = await fetch("/parking_slots.geojson");
+        if (!response.ok) throw new Error(`Failed to load parking layout (HTTP ${response.status})`);
+        const geoData = await response.json();
+        setGeo(geoData);
+        console.log(`📍 Loaded ${geoData.features?.length || 0} parking slots`);
+      } catch (error) {
+        console.error("❌ Layout loading error:", error);
+        setErr(`Failed to load parking layout: ${error.message}`);
       }
     })();
   }, []);
 
+  // Load real-time status from API
   useEffect(() => {
     (async () => {
       try {
-         if (apiUrl && !apiUrl.includes("PASTE_YOUR") && !apiUrl.includes("YOUR_API_GATEWAY_URL_HERE")) {
-          const live = await fetch(apiUrl).then(x => x.json());
-          const m = new Map();
-          live.forEach(d => m.set(d.slot_id, d.status));
-          setStatusById(m);
-        } else {
-          const demo = new Map();
-          ['A1','A3','A5','A15','A20','A25'].forEach(id => demo.set(id,'occupied'));
-          ['A2','A4','A6','A10','A16','A30'].forEach(id => demo.set(id,'vacant'));
-          setStatusById(demo);
+        setApiStatus("Fetching real-time data...");
+        console.log("🔗 Fetching parking status from:", apiUrl);
+        
+        const response = await fetch(apiUrl);
+        if (!response.ok) {
+          throw new Error(`API returned HTTP ${response.status}`);
         }
-      } catch (e) {
-        console.warn("Status fetch failed (using demo data):", e);
-        const demo = new Map();
-        ['A1','A3','A5','A15','A20','A25'].forEach(id => demo.set(id,'occupied'));
-        setStatusById(demo);
+        
+        const apiData = await response.json();
+        console.log("📊 API Response:", apiData);
+        
+        // Handle different API response formats
+        let parkingData = [];
+        if (Array.isArray(apiData)) {
+          parkingData = apiData;
+        } else if (apiData.body) {
+          // Lambda proxy integration
+          parkingData = typeof apiData.body === 'string' ? JSON.parse(apiData.body) : apiData.body;
+        } else if (apiData.Items) {
+          // DynamoDB scan result
+          parkingData = apiData.Items;
+        } else {
+          console.warn("Unexpected API response format");
+          parkingData = [];
+        }
+
+        // Create status map
+        const statusMap = new Map();
+        parkingData.forEach(slot => {
+          const slotId = slot.slot_id || slot.slotId || slot.id;
+          const status = slot.status || slot.occupancy_status || 'unknown';
+          if (slotId) {
+            statusMap.set(slotId, status);
+          }
+        });
+
+        setStatusById(statusMap);
+        setApiStatus(`Live data - ${statusMap.size} slots`);
+        setLoading(false);
+        
+        console.log(`✅ Loaded status for ${statusMap.size} slots`);
+        
+      } catch (error) {
+        console.error("❌ API fetch failed:", error);
+        setApiStatus(`API Error: ${error.message}`);
+        setLoading(false);
+        // Continue with layout-only display
       }
     })();
   }, [apiUrl]);
 
-  // Helpers to work with any polygon/multipolygon
+  // Helper to extract all coordinates from any geometry type
   const getAllCoords = (geom) => {
     const out = [];
     const walk = (c) => {
       if (!c) return;
-      if (typeof c[0] === "number" && typeof c[1] === "number") { out.push(c); return; }
+      if (typeof c[0] === "number" && typeof c[1] === "number") { 
+        out.push(c); 
+        return; 
+      }
       for (const x of c) walk(x);
     };
     walk(geom?.coordinates);
@@ -63,110 +101,274 @@ export default function SchematicLot({ apiUrl }) {
   // Compute bounds across all features
   const bounds = useMemo(() => {
     if (!geo?.features?.length) return null;
-    let minLng =  Infinity, maxLng = -Infinity;
-    let minLat =  Infinity, maxLat = -Infinity;
-    for (const f of geo.features) {
-      for (const [lng, lat] of getAllCoords(f.geometry)) {
+    
+    let minLng = Infinity, maxLng = -Infinity;
+    let minLat = Infinity, maxLat = -Infinity;
+    
+    for (const feature of geo.features) {
+      for (const [lng, lat] of getAllCoords(feature.geometry)) {
         if (lng < minLng) minLng = lng;
         if (lng > maxLng) maxLng = lng;
         if (lat < minLat) minLat = lat;
         if (lat > maxLat) maxLat = lat;
       }
     }
+    
     return { minLng, maxLng, minLat, maxLat };
   }, [geo]);
 
-  // Project lng/lat to SVG coords
+  // Project lng/lat to SVG coordinates
   const project = (lng, lat) => {
     if (!bounds) return [0, 0];
+    
     const { minLng, maxLng, minLat, maxLat } = bounds;
     const innerW = W - 2 * M;
     const innerH = H - 2 * M;
+    
     const x = M + ((lng - minLng) / Math.max(1e-9, (maxLng - minLng))) * innerW;
     const y = M + (1 - (lat - minLat) / Math.max(1e-9, (maxLat - minLat))) * innerH; // flip Y
+    
     return [x, y];
   };
 
-  // For each feature, return outer-ring polygon points + label position
+  // Convert features to SVG shapes
   const shapes = useMemo(() => {
     if (!geo?.features || !bounds) return [];
-    const arr = [];
-    for (const f of geo.features) {
-      const id = f?.properties?.slot_id || "";
-      const status = statusById.get(id) || f?.properties?.status || "unknown";
+    
+    const shapeArray = [];
+    
+    for (const feature of geo.features) {
+      const slotId = feature?.properties?.slot_id || "";
+      const status = statusById.get(slotId) || feature?.properties?.status || "unknown";
 
-      const type = f?.geometry?.type;
-      const coords = f?.geometry?.coordinates;
+      const geomType = feature?.geometry?.type;
+      const coords = feature?.geometry?.coordinates;
       if (!coords) continue;
 
-      // Get one outer ring per geometry (if MultiPolygon, render each part)
-      const polys = type === "Polygon" ? [coords] : (type === "MultiPolygon" ? coords : []);
-      for (const poly of polys) {
-        const outer = poly[0]; // first ring
-        if (!outer?.length) continue;
+      // Handle different geometry types
+      const polygons = geomType === "Polygon" ? [coords] : 
+                      geomType === "MultiPolygon" ? coords : [];
+      
+      for (const polygon of polygons) {
+        const outerRing = polygon[0]; // First ring is outer boundary
+        if (!outerRing?.length) continue;
 
-        // SVG polygon points
-        const points = outer.map(([lng, lat]) => project(lng, lat).join(",")).join(" ");
+        // Convert to SVG polygon points
+        const points = outerRing
+          .map(([lng, lat]) => project(lng, lat).join(","))
+          .join(" ");
 
-        // simple centroid: average of points
-        let cx = 0, cy = 0;
-        outer.forEach(([lng, lat]) => {
+        // Calculate centroid for label placement
+        let centerX = 0, centerY = 0;
+        outerRing.forEach(([lng, lat]) => {
           const [x, y] = project(lng, lat);
-          cx += x; cy += y;
+          centerX += x; 
+          centerY += y;
         });
-        cx /= outer.length; cy /= outer.length;
+        centerX /= outerRing.length; 
+        centerY /= outerRing.length;
 
-        arr.push({ id, status, points, cx, cy });
+        shapeArray.push({ 
+          id: slotId, 
+          status, 
+          points, 
+          centerX, 
+          centerY 
+        });
       }
     }
-    return arr;
+    
+    return shapeArray;
   }, [geo, bounds, statusById]);
 
-  if (err) {
-    return <div style={{ color: "#b00020" }}>Layout error: {err}</div>;
-  }
-  if (!bounds) {
-    return <div>Loading layout…</div>;
+  // Status color mapping
+  const getStatusColor = (status) => {
+    switch (status) {
+      case "occupied":
+      case "unavailable":
+        return "#dc2626"; // Red
+      case "vacant":
+      case "available":
+        return "#16a34a"; // Green
+      default:
+        return "#6b7280"; // Gray for unknown
+    }
+  };
+
+  // Loading state
+  if (loading) {
+    return (
+      <div>
+        <div style={{ margin: "8px 0 10px", fontWeight: 600 }}>Parking Layout</div>
+        <div style={{
+          height: 300,
+          border: "1px solid #d1d5db",
+          borderRadius: 8,
+          background: "#f9fafb",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          gap: 8
+        }}>
+          <div style={{ fontSize: 16, fontWeight: 500 }}>🔄 Loading Parking Data</div>
+          <div style={{ fontSize: 12, color: "#6b7280" }}>{apiStatus}</div>
+        </div>
+      </div>
+    );
   }
 
-  const color = (status) =>
-    status === "occupied" ? "#d93025" :
-    status === "vacant"   ? "#1a7f37" :
-                            "#9e9e9e";
+  // Error state
+  if (err) {
+    return (
+      <div>
+        <div style={{ margin: "8px 0 10px", fontWeight: 600 }}>Parking Layout</div>
+        <div style={{
+          padding: 16,
+          background: "#fef2f2",
+          color: "#991b1b",
+          border: "1px solid #fecaca",
+          borderRadius: 8
+        }}>
+          ⚠️ {err}
+        </div>
+      </div>
+    );
+  }
+
+  // No data state
+  if (!bounds || shapes.length === 0) {
+    return (
+      <div>
+        <div style={{ margin: "8px 0 10px", fontWeight: 600 }}>Parking Layout</div>
+        <div style={{
+          padding: 16,
+          background: "#f3f4f6",
+          color: "#374151",
+          border: "1px solid #d1d5db",
+          borderRadius: 8
+        }}>
+          📍 No parking data available
+        </div>
+      </div>
+    );
+  }
+
+  // Count slots by status
+  const statusCounts = shapes.reduce((acc, shape) => {
+    acc[shape.status] = (acc[shape.status] || 0) + 1;
+    return acc;
+  }, {});
 
   return (
     <div>
-      <div style={{ margin: "8px 0 10px", fontWeight: 600 }}>Parking Layout</div>
+      {/* Header with status info */}
+      <div style={{ 
+        display: "flex", 
+        justifyContent: "space-between", 
+        alignItems: "center",
+        margin: "8px 0 10px" 
+      }}>
+        <div style={{ fontWeight: 600 }}>Parking Layout</div>
+        <div style={{ 
+          fontSize: 12, 
+          color: "#6b7280",
+          display: "flex",
+          gap: 12
+        }}>
+          <span>🔗 {apiStatus}</span>
+          <span>📊 Total: {shapes.length} slots</span>
+        </div>
+      </div>
 
+      {/* Status summary */}
+      <div style={{
+        display: "flex",
+        gap: 12,
+        marginBottom: 10,
+        fontSize: 12
+      }}>
+        {Object.entries(statusCounts).map(([status, count]) => (
+          <div key={status} style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "4px 8px",
+            background: "#f3f4f6",
+            borderRadius: 4,
+            border: "1px solid #e5e7eb"
+          }}>
+            <div style={{
+              width: 12,
+              height: 12,
+              borderRadius: 2,
+              backgroundColor: getStatusColor(status)
+            }} />
+            <span style={{ textTransform: "capitalize", fontWeight: 500 }}>
+              {status}: {count}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* SVG parking layout */}
       <svg
         viewBox={`0 0 ${W} ${H}`}
         width="100%"
-        style={{ border: "1px solid #ddd", borderRadius: 8, background: "#fafafa" }}
+        style={{ 
+          border: "1px solid #d1d5db", 
+          borderRadius: 8, 
+          background: "#fafafa" 
+        }}
         role="img"
-        aria-label="Parking slot schematic"
+        aria-label="UTAR Kampar Block M Parking Layout"
       >
-        {/* slots */}
-        {shapes.map((s, i) => (
-          <g key={`${s.id}-${i}`}>
+        {/* Render parking slots */}
+        {shapes.map((shape, index) => (
+          <g key={`${shape.id}-${index}`}>
+            {/* Parking slot polygon */}
             <polygon
-              points={s.points}
-              fill={color(s.status)}
-              fillOpacity="0.55"
-              stroke="#333"
-              strokeWidth="1"
+              points={shape.points}
+              fill={getStatusColor(shape.status)}
+              fillOpacity="0.7"
+              stroke="#374151"
+              strokeWidth="1.5"
+              style={{ cursor: "pointer" }}
             />
-            {/* label */}
+            
+            {/* Slot ID label */}
             <text
-              x={s.cx}
-              y={s.cy}
+              x={shape.centerX}
+              y={shape.centerY}
               textAnchor="middle"
               alignmentBaseline="middle"
-              style={{ fontSize: 12, fill: "#111", paintOrder: "stroke", stroke: "#fff", strokeWidth: 2 }}
+              style={{ 
+                fontSize: 11, 
+                fill: "#ffffff", 
+                fontWeight: 600,
+                paintOrder: "stroke", 
+                stroke: "#000000", 
+                strokeWidth: 2 
+              }}
             >
-              {s.id}
+              {shape.id}
             </text>
           </g>
         ))}
+        
+        {/* Title */}
+        <text
+          x={W / 2}
+          y={M / 2}
+          textAnchor="middle"
+          style={{
+            fontSize: 14,
+            fontWeight: 600,
+            fill: "#374151"
+          }}
+        >
+          UTAR Kampar Block M Parking
+        </text>
       </svg>
     </div>
   );
