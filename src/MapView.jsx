@@ -22,8 +22,29 @@ export default function MapView({ apiUrl }) {
     try {
       const map = new maplibregl.Map({
         container: "map",
-        // OpenStreetMap tiles via MapLibre demo style
-        style: "https://demotiles.maplibre.org/style.json",
+        // Esri World Street Map for clearer basemap context
+        style: {
+          version: 8,
+          sources: {
+            esri: {
+              type: "raster",
+              tiles: [
+                "https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"
+              ],
+              tileSize: 256,
+              attribution: "&copy; Esri &mdash; Esri, DeLorme, NAVTEQ"
+            }
+          },
+          layers: [
+            {
+              id: "esri",
+              type: "raster",
+              source: "esri",
+              minzoom: 0,
+              maxzoom: 22
+            }
+          ]
+        },
         center: [101.139, 4.3386], // UTAR Kampar Block M coordinates
         zoom: 19 // Close zoom to see parking slots
       });
