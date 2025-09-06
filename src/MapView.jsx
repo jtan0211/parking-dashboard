@@ -7,6 +7,7 @@ export default function MapView({ apiUrl }) {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(true);
   const [dataStatus, setDataStatus] = useState("Loading...");
+  const [mapLoaded, setMapLoaded] = useState(false);
 
   // Recursively collect [lng,lat] pairs from any GeoJSON coordinate tree
   function collectPositions(coords, out = []) {
@@ -52,6 +53,7 @@ export default function MapView({ apiUrl }) {
 
       map.on("load", async () => {
         try {
+          setMapLoaded(true);
           console.log("🗺️ Map loaded successfully");
           
           // 1) Load parking layout from GeoJSON
@@ -103,7 +105,7 @@ export default function MapView({ apiUrl }) {
             });
 
             console.log(`✅ Loaded real-time status for ${statusById.size} slots`);
-            setDataStatus(`Connected - ${statusById.size} slots monitored`);
+            setDataStatus(`Live Data - ${statusById.size} slots monitored`);
             
           } catch (apiError) {
             console.error("❌ API fetch failed:", apiError);
@@ -276,10 +278,16 @@ export default function MapView({ apiUrl }) {
         }
       });
 
+      // Only show errors that actually prevent the map from working
       map.on("error", (e) => {
-        console.error("❌ Map error:", e);
-        setErr(`Map error: ${e?.error?.message || e.message || "Unknown map error"}`);
-        setLoading(false);
+        console.warn("⚠️ Map warning (non-critical):", e);
+        
+        // Only set error if map hasn't loaded successfully
+        if (!mapLoaded) {
+          setErr(`Map initialization failed: ${e?.error?.message || e.message || "Unknown map error"}`);
+          setLoading(false);
+        }
+        // If map has loaded, these are likely non-critical tile loading errors
       });
 
       return () => {
@@ -321,8 +329,8 @@ export default function MapView({ apiUrl }) {
         </div>
       )}
       
-      {/* Error display */}
-      {err && (
+      {/* Error display - only show for critical errors */}
+      {err && !mapLoaded && (
         <div style={{
           position: "absolute", 
           zIndex: 1000, 
